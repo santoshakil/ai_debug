@@ -1,0 +1,42 @@
+[package]
+name = "ai_debug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+readme = "../../../README.md"
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+libc = { workspace = true }
+base64 = { workspace = true }
+
+irondash_dart_ffi = { workspace = true }
+rmcp = { workspace = true }
+mdns-sd = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+cbindgen = { workspace = true }

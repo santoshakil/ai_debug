@@ -1,0 +1,72 @@
+# rust
+target/
+Cargo.lock
+*.dylib
+*.so
+*.dll
+*.rlib
+
+# rust generated
+rust/crates/ai_debug/src/pb/
+rust/generated/
+
+# flutter
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+**/generated_plugin_registrant.dart
+.build/
+build/
+**/pubspec.lock
+
+# flutter generated
+flutter/packages/ai_debug/lib/src/generated/
+protos/**/*.pb.dart
+protos/**/*.pbenum.dart
+protos/**/*.pbjson.dart
+protos/**/*.pbserver.dart
+
+# flutter ios
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Pods/
+**/ios/Runner.xcworkspace/xcuserdata/
+**/ios/Runner.xcodeproj/xcuserdata/
+**/ios/Runner.xcodeproj/project.xcworkspace/xcuserdata/
+
+# flutter macos
+**/macos/Flutter/ephemeral/
+**/macos/Pods/
+**/macos/Runner.xcworkspace/xcuserdata/
+**/macos/Runner.xcodeproj/xcuserdata/
+
+# flutter android
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/android/local.properties
+**/android/key.properties
+**/android/app/release/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ide
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# os
+.DS_Store
+Thumbs.db
+
+# coverage
+coverage/
+*.lcov

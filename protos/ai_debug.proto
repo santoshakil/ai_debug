@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package ai_debug;
+
+// Envelope: Dart → Rust
+message ToRust {
+  oneof kind {
+    RegisterTool register = 1;
+    UnregisterTool unregister = 2;
+    ToolResult tool_result = 3;
+    LogRecord dart_log = 4;           // forwarded ad-hoc (streaming); normal query reads Dart's own buffer
+    Shutdown shutdown = 5;
+  }
+}
+
+// Envelope: Rust → Dart (sent over NativeEventPort; outer event_id switches on kind)
+message ToDart {
+  oneof kind {
+    ToolInvoke invoke = 1;
+    ToolCancel cancel = 2;
+    QueryDartLogs query_dart_logs = 3;
+    StreamSubscribe stream_subscribe = 4;
+    StreamUnsubscribe stream_unsubscribe = 5;
+  }
+}
+
+// -- Tool registration --------------------------------------------------------
+
+message RegisterTool {
+  string name = 1;                   // unique, e.g., "immich.sync.hashAssets"
+  string description = 2;
+  string input_schema_json = 3;      // JSON Schema for args
+  optional string output_schema_json = 4;
+  bool streaming = 5;                // if true, produces multiple ToolResult with is_partial=true
+}
+
+message UnregisterTool { string name = 1; }
+
+// -- Tool invocation & result -----------------------------------------------
+
+message ToolInvoke {
+  int64 request_id = 1;
+  string name = 2;
+  string args_json = 3;              // JSON-encoded args
+  bool streaming = 4;                // the tool was declared streaming
+}
+
+message ToolCancel { int64 request_id = 1; }
+
+message ToolResult {
+  int64 request_id = 1;
+  bool success = 2;
+  optional string error = 3;         // set when success=false
+  optional string result_json = 4;   // JSON-encoded result (set when success=true)
+  optional bytes binary = 5;         // raw binary (screenshots etc.)
+  optional string binary_mime = 6;   // e.g., "image/png"
+  bool is_partial = 7;               // true for intermediate streaming frames
+}
+
+// -- Logs ---------------------------------------------------------------------
+
+message LogRecord {
+  int64 timestamp_ms = 1;
+  Source source = 2;
+  Level level = 3;
+  string logger = 4;
+  string message = 5;
+  optional string error = 6;
+  optional string stack = 7;
+  map<string, string> fields = 8;
+
+  enum Source { RUST = 0; DART = 1; }
+  enum Level { TRACE = 0; DEBUG = 1; INFO = 2; WARN = 3; ERROR = 4; }
+}
+
+message QueryDartLogs {
+  int64 request_id = 1;
+  int32 limit = 2;
+  optional int64 since_ms = 3;
+  optional LogRecord.Level min_level = 4;
+  optional string grep = 5;
+}
+
+// -- Streaming (future) -------------------------------------------------------
+
+message StreamSubscribe {
+  int64 stream_id = 1;
+  string topic = 2;                  // e.g., "logs", "route_changes"
+  string args_json = 3;
+}
+
+message StreamUnsubscribe { int64 stream_id = 1; }
+
+// -- Lifecycle ----------------------------------------------------------------
+
+message Shutdown {}

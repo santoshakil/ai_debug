@@ -1,0 +1,3 @@
+[submodule "case-studies/immich"]
+	path = case-studies/immich
+	url = https://github.com/santoshakil/immich_ai_debug_tools.git
