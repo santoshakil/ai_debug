@@ -1,241 +1,244 @@
 # ai_debug
 
-Embedded MCP debug bridge for Flutter apps. Lets an AI agent (Claude Code, etc.) tail your app's logs and invoke functions inside a running app — for autonomous debugging, scripted reproduction, and live exploration.
+An in-app debugging bridge for Flutter with an embedded MCP Streamable HTTP
+server and browser dashboard. It is one Flutter package implemented entirely
+in Dart. It has no Rust, FFI, protobuf, native plugin, code generation, or
+helper process.
 
-- **Server**: Rust (`axum` + `rmcp`) embedded in the app's dylib. No external binary, no extra process.
-- **Transport**: MCP Streamable HTTP (2025-03-26) over `POST /mcp`, plus a plain REST surface. mDNS advertised as `_ai-debug._tcp.local.`.
-- **Integration**: 3 lines in `main.dart` + per-feature `AiDebug.register(...)`.
-- **Telemetry collector**: stdlib-only Python server in `tools/` that ingests events pushed from the app — useful for long-running tests where the bridge itself may go down.
+## What it includes
 
-> Status: alpha (`0.1.0`). Used in production debugging of a real-world Flutter app (~155 tools registered, multi-isolate telemetry, ~2k events/session). API surface may shift before `1.0`.
+- MCP tools, small REST endpoints, and a live browser dashboard
+- bounded logs plus Flutter, platform, and explicitly recorded error history
+- process RSS, image cache, scheduler, display, and timer-lag samples
+- refresh-rate-aware frame timings, FPS, missed frames, percentiles, and raster
+  cache measurements
+- bounded widget, render, debug-layer, semantics, and focus inspection
+- semantics-first tap, double-tap, long-press, drag, pinch, scroll, wait, and
+  action runs
+- explicit state, route, network, screenshot, trace, and isolate support
+- optional VM service CPU, memory, allocation, stack, isolate, and timeline tools
+- opt-in file reads, outbound probes, telemetry forwarding, and mDNS discovery
 
-## Architecture
-
-```
-MCP client (Claude)            Flutter app (iOS / Android / desktop)
-───────────────────            ──────────────────────────────────────
-HTTP + Streamable HTTP         Dart: ai_debug package
-                                 - Logger.root → ring buffer
-                                 - CommandRegistry (tool defs)
-                                 - NativeEventReceiver
-                                       │ FFI (prost)
-                                       ▼
-                               Rust: ai_debug crate (cdylib)
-                                 - tokio static Runtime
-                                 - axum + rmcp (MCP server, /mcp)
-                                 - tracing Layer → ring buffer
-                                 - NativeEventPort (irondash)
-                                 - mdns-sd advertise
-```
-
-A separate, optional **collector** at `tools/collector.py` ingests JSON events POSTed by the in-app telemetry pusher to a stable host on your LAN — useful when the device under test is being kicked around (background isolates, terminations, network flaps) and you want a durable record outside the app process.
-
-## Quick start
-
-```bash
-git clone https://github.com/santoshakil/ai_debug.git
-cd ai_debug
-./scripts/setup.sh             # installs protoc + dart deps
-cargo build -p ai_debug        # builds the cdylib + cbindgen header
-cd examples/minimal_app
-flutter pub get
-flutter run                    # starts the app + ai_debug HTTP server on :9999
-```
-
-In your MCP client config (`~/.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "ai-debug": {
-      "type": "sse",
-      "url": "http://localhost:9999/mcp"
-    }
-  }
-}
-```
-
-Sanity check from a terminal:
-
-```bash
-curl http://localhost:9999/healthz                          # → ok
-curl http://localhost:9999/api/tools | jq .tools[].name     # → list of registered tools
-curl -X POST http://localhost:9999/api/cmd/<tool> -d '{}'   # → invoke a tool
-```
-
-## Integration into an existing Flutter app
+## Install
 
 ```yaml
-# pubspec.yaml
 dependencies:
   ai_debug:
     git:
       url: https://github.com/santoshakil/ai_debug.git
-      path: flutter/packages/ai_debug
 ```
 
+For local development:
+
+```yaml
+dependencies:
+  ai_debug:
+    path: ../ai_debug
+```
+
+## Start
+
+Initialize Flutter first. Keep the token in an ignored local environment file
+and pass it as a Dart define; process environment variables are not available
+through `String.fromEnvironment` unless they are passed explicitly.
+
 ```dart
-// main.dart
 import 'package:ai_debug/ai_debug.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
-void main() async {
+const _requested = bool.fromEnvironment('AI_DEBUG');
+const _token = String.fromEnvironment('AI_DEBUG_TOKEN');
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (kDebugMode) {
-    await AiDebug.start(appId: 'my_app');
+  if (!kReleaseMode && _requested && _token.length >= 32) {
+    await AiDebug.start(
+      config: AiDebugConfig(
+        appId: 'my_app',
+        port: 9999,
+        token: _token,
+        features: const AiDebugFeatures(
+          automation: true,
+          navigation: true,
+          network: true,
+          screenshots: true,
+          vmService: true,
+        ),
+        automation: const UiAutomationConfig(allowInput: false),
+      ),
+    );
   }
   runApp(const MyApp());
 }
 ```
 
-Register custom tools anywhere:
+```bash
+export AI_DEBUG_TOKEN='use-a-long-local-secret'
+flutter run \
+  --dart-define=AI_DEBUG=true \
+  --dart-define=AI_DEBUG_TOKEN="$AI_DEBUG_TOKEN"
+```
+
+`AiDebugConfig` creates a random 32-byte access token when `token` is omitted.
+Read `AiDebug.token` after startup and give it only to the local MCP client or
+dashboard. A fixed local token is easier for repeated development runs. Do not
+log or ship either token.
 
 ```dart
-AiDebug.register(
-  name: 'navigate',
-  description: 'Push a route',
-  inputSchema: AiDebugSchema.object({
-    'path': AiDebugSchema.string(),
-  }, required: ['path']),
-  handler: (args) async {
-    await router.push(args['path'] as String);
-    return {'ok': true};
-  },
-);
+await AiDebug.start(appId: 'my_app');
+final accessToken = AiDebug.token;
+final port = AiDebug.endpointPort;
 ```
 
-See [`docs/integration.md`](docs/integration.md) for platform-specific dylib loading (macOS / iOS / Android).
+Clients send the token as `Authorization: Bearer <token>` or
+`X-AI-Debug-Token: <token>`. The safe default binds to `127.0.0.1`. A
+non-loopback bind also requires `unsafeLan: true`; the server still uses plain
+HTTP, so use it only on a trusted development network.
+For a wildcard bind, add every direct IP or DNS authority clients will use to
+`allowedHosts`; the generated mDNS hostname is accepted automatically. Keep
+`allowedOrigins` limited to exact browser origins that need cross-origin API
+access. Same-origin dashboard requests work without adding an origin.
 
-## REST endpoints
+Release builds are blocked by default even if startup is called. Setting
+`allowRelease: true` is an explicit override and should be limited to a
+controlled internal build.
 
-| method      | path             | purpose                                                                                                          |
-|-------------|------------------|------------------------------------------------------------------------------------------------------------------|
-| GET         | `/healthz`       | plaintext `ok`                                                                                                   |
-| GET         | `/api/tools`     | JSON list of registered tools (shape compatible with MCP `tools/list`)                                           |
-| GET         | `/api/logs`      | merged Rust + Dart log tail (`?limit=&level=&grep=&source=&since_ms=`)                                           |
-| POST        | `/api/cmd/:name` | invoke a Dart tool with JSON body args                                                                           |
-| **GET/HEAD**| **`/api/file`**  | **stream an absolute file path off the device. `Range` header supported (resume + parallel chunks). HEAD = stat.** |
-| POST        | `/mcp`           | **MCP JSON-RPC** (Streamable HTTP transport, MCP 2025-03-26)                                                     |
+## Feature gates
 
-## Built-in tools
+The default `AiDebugFeatures()` exposes read-only diagnostics, logs, state,
+resource, frame, UI, trace, lifecycle, and cooperative isolate views. The
+`resources` gate contains the in-process DevTools views. These remote tools and
+discovery paths are off until enabled:
 
-The Dart package ships with a small set of always-on tools. Register them with `registerBuiltinTools(registry)` (called by `AiDebug.start()` by default):
+- `screenshots`: capture the configured root or current render view
+- `automation`: inspect semantics and send bounded pointer actions
+- `navigation`: use the app-provided route adapter
+- `network`: track instrumented requests and run outbound probes
+- `files`: read only inside explicit absolute `allowedFileRoots`
+- `runtimeControls`: add controls to enabled read gates, plus time dilation,
+  overlay, clipboard, haptics, and system sound
+- `telemetry`: start a collector, then send bounded events to HTTPS or loopback HTTP
+- `vmService`: connect to the current Dart VM service when one is available
+- `discovery`: advertise a non-loopback, `unsafeLan` server with mDNS
 
-| group | tools                                                                                                  |
-|-------|--------------------------------------------------------------------------------------------------------|
-| logs  | `log_tail`, `log_grep`, `log_clear`                                                                    |
-| time  | `time_now`, `time_uptime`                                                                              |
-| net   | `network_http_get`, `network_http_post_json`, `network_dns_lookup`, `network_self_ips`, `network_check_port` |
-| rt    | `runtime_info`, `runtime_isolate_id`, `runtime_gc_hint`, `vm_force_gc`, `vm_isolate_id`                |
-| fs    | `fs_app_dirs`, `fs_listing`, `fs_walk`, `fs_stat`, `fs_dir_size`, `fs_read_text`, `fs_read_bytes`, `fs_disk_free` |
-| chan  | `platform_invoke` — invoke an arbitrary Flutter MethodChannel from outside the app                     |
-| tlm   | `telemetry_start`, `telemetry_stop`, `telemetry_status`, `telemetry_emit`, `telemetry_flush`           |
+Use `AiDebugFeatures.none()` for an allow-list setup. `AiDebugFeatures.all()`
+enables every gate except discovery and requires at least one
+`allowedFileRoots` entry. Pass `files: false` when file access is not needed.
+Pass `discovery: true` to include discovery.
 
-## Pulling files off the device
+The default server advertises 31 remote tools. `none()` advertises only the
+transport-managed `list_apps` tool. `all()` advertises 104 tools. See the
+[tool reference](doc/tools.md) for the exact gate matrix.
 
-For anything bigger than a few MB (sqlite DBs, log dumps, exports), use the streaming endpoint — it pipes bytes kernel → socket via `tokio::fs::File` + `tokio_util::io::ReaderStream`, with no Dart heap involvement and no base64 bloat.
+## App adapters
 
-```bash
-# stat first
-curl -sI "http://<bridge-host>:9999/api/file?path=/abs/path/on/device"
-
-# pull (saves with Content-Disposition filename via -OJ)
-curl -OJ "http://<bridge-host>:9999/api/file?path=/abs/path/on/device"
-
-# resume after interruption
-curl -OJC - "http://<bridge-host>:9999/api/file?path=/abs/path/on/device"
-
-# parallel chunks (4 workers)
-curl -r 0-      -o part0 "..." &
-curl -r 1048576-2097151 -o part1 "..." &
-# ... reassemble with `cat part* > whole`
-```
-
-Path policy: must be absolute, must not contain `..`, must point to a regular file. The bridge runs in debug mode only — it can read anything the app process can read. Don't expose port 9999 outside your dev network.
-
-For extracting an in-app sqlite DB without races against running writers, your app's tool registrations should pair this endpoint with a `VACUUM INTO 'snapshot.db'` call (see the [Immich case study](case-studies/immich/) for a worked `db_snapshot` example).
-
-For very small files (`<` few MB), the `fs_read_bytes` Dart tool returns base64 chunks via the regular tool-call channel — simpler when you don't want a side-channel HTTP request.
-
-## Telemetry collector
-
-For long-running tests where the bridge itself may go down (background isolate fires, app terminations, sustained-load hangs), use the in-app **telemetry pusher** + Mac-side **collector**:
-
-```bash
-# on the collector host (Mac, Linux, lab box)
-python3 tools/collector.py --host 0.0.0.0 --port 9990 --out /tmp/ai-debug-events.jsonl
-```
+`state.*` exposes only registered state sources. Register safe snapshots and
+redact anything private.
 
 ```dart
-// in your Flutter app, anywhere after AiDebug.start()
-AiDebug.startTelemetry(
-  collectorUrl: 'http://<collector-host>:9990',
-  appId: 'my_app',
-  isolate: 'main',  // or 'bg' from a background isolate entrypoint
-);
+AiDebug.registerStateSource(StateSource(
+  name: 'session',
+  snapshot: () => {'signedIn': session.isSignedIn},
+  changesFactory: () => session.changes,
+));
+
+AiDebug.setNavigation(NavigationAdapter(
+  snapshot: () => {'route': router.current.name},
+  navigate: (location, _) => router.navigatePath(location),
+  back: router.maybePopTop,
+));
 ```
 
-The pusher subscribes to `Logger.root` (warnings + above) plus `WidgetsBindingObserver` lifecycle events, batches them, and POSTs to the collector. Uses raw socket HTTP/1.1 to work around an iOS `dart:io` `HttpClient` bug where the request body is dropped (`Content-Length: 0`). Bounded retry queue, 2s flush interval.
+Explicit network tracking stores method, scheme, host, port, path, query keys,
+duration, status, and byte counts. It removes user info and fragments and
+replaces every query value with `[redacted]`. Paths and query keys can still
+contain private data. It does not capture headers or bodies.
 
-The collector is **stdlib-only Python 3** — no `pip install` required. Endpoints:
+```dart
+final request = AiDebug.trackNetwork(method: 'GET', uri: uri);
+try {
+  final response = await client.get(uri);
+  request.finish(
+    status: response.statusCode,
+    responseBytes: response.bodyBytes.length,
+  );
+} catch (error) {
+  request.fail(error);
+  rethrow;
+}
+```
 
-| method | path              | purpose                                              |
-|--------|-------------------|------------------------------------------------------|
-| POST   | `/event`          | append a JSON event to the JSONL log                 |
-| GET    | `/events`         | last N events (`?limit=200&kind=&isolate=`)          |
-| GET    | `/events.jsonl`   | full JSONL dump                                      |
-| GET    | `/summary`        | counts by kind + recent activity                     |
-| GET    | `/tail`           | server-sent event stream of new events               |
-| GET    | `/health`         | `ok`                                                 |
+For stable automation selectors, wrap important controls with `AiDebugTarget`
+and use its identifier in `ui.*` tools.
+Unlabeled nodes can be targeted by the `id` and `view_id` pair returned by
+`ui.snapshot` or `ui.find`. That pair remains valid only while the Flutter
+semantics node stays attached.
 
-Three helpers ship next to it:
+`UiAutomationConfig.enabled` controls automation. `allowInput: false` keeps
+inspection but blocks input. Raw coordinates and text-field values are off by
+default. All action and snapshot limits are configurable and bounded.
 
-- **`tools/tail.sh`** — live SSE stream, one line per event. Best for watching as things happen:
-  ```bash
-  COLLECTOR=http://<collector-host>:9990 ./tools/tail.sh
-  # 07:10:11  [main ]  bg_isolate_boot          [INFO   ]  elapsedMs=270
-  # 07:10:13  [bg   ]  log                      [WARNING]  upload failed: timeout
-  # 07:10:14  [main ]  monitor_heartbeat                   hashed=4936 remote=7142
-  ```
-  Pipe through `grep` to filter (`| grep bg`, `| grep -E 'WARNING|SEVERE'`).
-- **`tools/watch.sh`** — periodic curl loop over `/summary`, suitable for `tail -f`-style observation when you want aggregates rather than per-event.
-- **`tools/analyze.py`** — reads a JSONL dump, prints event histograms, log pattern grouping (UUID/number-collapsed templates), error class distribution, and generic failure indicators.
+## Endpoints
 
-## Case study: testing with Immich
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/` or `/dashboard` | local live dashboard |
+| `GET` | `/healthz` | readiness |
+| `GET` | `/api/tools` | tool definitions |
+| `GET` | `/api/logs` | bounded Dart logs |
+| `POST` | `/api/cmd/<name>` | direct tool call |
+| `GET`, `HEAD` | `/api/file?path=...` | allowed-root file stream with ranges |
+| `POST` | `/mcp` | MCP Streamable HTTP requests |
+| `DELETE` | `/mcp` | close a legacy MCP session |
 
-This library was developed and stress-tested against [Immich](https://github.com/immich-app/immich)'s Flutter client to debug iOS background sync, iCloud upload behavior, and engine-collision issues. ~130 tool registrations across 22 files, ~2k telemetry events captured per overnight session, multiple background-isolate fires recorded with full timeline per fire.
+The dashboard shell and `/healthz` are public but return no debug data. Every
+other endpoint requires the access token.
 
-The Immich-specific tool registrations live in a dedicated repo that gets mounted **two ways**:
-- As a submodule inside an Immich fork at `mobile/lib/utils/ai_debug/` — the `.dart` files become real Immich source there.
-- As a submodule of this repo at `case-studies/immich/` — same content, used here as worked-example reference.
+`/api/file` returns `416` when the full file or requested range exceeds
+`maxResultBytes`, which defaults to 4 MiB.
 
-Repo: [`immich_ai_debug_tools`](https://github.com/santoshakil/immich_ai_debug_tools).
+The MCP server supports stateless revision `2026-07-28` and legacy revisions
+`2025-03-26`, `2025-06-18`, and `2025-11-25`. Configure the client for
+Streamable HTTP at the bound `/mcp` URL. Revision `2026-07-28` can start with
+`server/discover` or call tools directly; legacy clients use `initialize` and
+then `notifications/initialized`. Later legacy requests include the returned
+`Mcp-Session-Id` and negotiated `MCP-Protocol-Version` headers.
+Server-sent event streaming is not implemented.
 
-## Platform support
+## Documentation
 
-| target              | status    | notes                                                                                                |
-|---------------------|-----------|------------------------------------------------------------------------------------------------------|
-| macOS (desktop)     | ✅ tested  | `cargo build` + `AI_DEBUG_DYLIB=...` env var                                                         |
-| iOS (device)        | ✅ tested  | static link via `native_toolchain_rust` hook                                                         |
-| iOS (simulator)     | ✅ tested  |                                                                                                      |
-| Android (arm64)     | ✅ tested  | NDK cross-compile via `native_toolchain_rust` hook. `adb forward tcp:19999 tcp:9999` for host access |
-| Linux               | 🟡 wip    |                                                                                                      |
-| Windows             | 🟡 wip    |                                                                                                      |
+- [Integration guide](doc/integration.md)
+- [Tool and feature reference](doc/tools.md)
+- [Security policy](SECURITY.md)
+- [Change history](CHANGELOG.md)
 
-## Roadmap
+## Feature safety
 
-- ✅ **Phase 1** — Rust cdylib + axum + tracing ring buffer + NativeEventPort + mDNS
-- ✅ **Phase 1.5** — Dart log query via NativeEventPort → merged `/api/logs`
-- ✅ **Phase 2** — Dart tool invocation via `POST /api/cmd/:name`
-- ✅ **Phase 2.5** — `rmcp` `ServerHandler` + `StreamableHttpService` at `/mcp` with dynamic tool discovery
-- ✅ **Phase 2.7** — Telemetry pusher + Python collector + analyzer
-- ⏳ **Phase 3** — Screenshot, widget tree dump, riverpod-state inspectors
-- ⏳ **Phase 4** — VM Service proxy (hot reload, Dart expression eval) — optional, big
+- All histories, snapshots, queues, request bodies, results, and action runs
+  have fixed limits.
+- A timed-out tool keeps the serial tool slot until its handler settles because
+  Dart futures cannot be cancelled safely.
+- Network history covers only requests passed through `AiDebug.trackNetwork`.
+- State history covers only registered state sources.
+- Frame timings cannot attribute a frame to one view in a multi-view engine.
+- RSS is whole-process memory. CPU, Dart heap, allocation, GC, and full engine
+  timelines need the optional VM service tools.
+- `vm.cpu` also needs the VM sampling profiler to be enabled.
+- GPU, thermal, battery, native heap, arbitrary platform-channel inspection,
+  and host-level network traffic are outside this Dart package.
+- The package requires `dart:io`; Flutter web is not supported.
+- Debug or profile mode gives the useful Flutter and VM inspection data.
 
-## Contributing
+## Verify
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Issues + PRs welcome.
+```bash
+dart format --set-exit-if-changed lib test example
+flutter analyze
+flutter test
+dart pub publish --dry-run
+```
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT. See [LICENSE](LICENSE).
