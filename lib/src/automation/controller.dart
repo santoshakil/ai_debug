@@ -153,6 +153,8 @@ class UiAutomationController {
     required double dy,
     Duration duration = const Duration(milliseconds: 200),
     int steps = 12,
+    Duration holdStart = Duration.zero,
+    Duration holdEnd = Duration.zero,
   }) {
     return _gate.run(
       () => _drag(
@@ -164,6 +166,8 @@ class UiAutomationController {
         dy: dy,
         duration: duration,
         steps: steps,
+        holdStart: holdStart,
+        holdEnd: holdEnd,
       ),
     );
   }
@@ -442,6 +446,8 @@ class UiAutomationController {
     required double dy,
     required Duration duration,
     required int steps,
+    required Duration holdStart,
+    required Duration holdEnd,
   }) async {
     _checkInput();
     _cancellation.check();
@@ -491,6 +497,8 @@ class UiAutomationController {
       steps: steps,
       maxDuration: config.limits.maxGesture,
       cancellation: _cancellation,
+      holdStart: holdStart,
+      holdEnd: holdEnd,
     );
     await _afterAction();
     return {
@@ -849,6 +857,12 @@ class UiAutomationController {
               _optional<int>(step, 'duration_ms') ?? _dragDurationDefault,
         ),
         steps: _optional<int>(step, 'steps') ?? 12,
+        holdStart: Duration(
+          milliseconds: _optional<int>(step, 'hold_start_ms') ?? 0,
+        ),
+        holdEnd: Duration(
+          milliseconds: _optional<int>(step, 'hold_end_ms') ?? 0,
+        ),
       ),
       'pinch' => _pinch(
         selector: _optionalSelector(step),

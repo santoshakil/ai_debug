@@ -59,6 +59,50 @@ void main() {
     );
   });
 
+  test(
+    'drag holds keep the pointer down before moving and before lifting',
+    () async {
+      final events = <PointerEvent>[];
+      final stamps = <Duration>[];
+      final driver = UiGestureDriver(
+        dispatch: (event) {
+          events.add(event);
+          stamps.add(event.timeStamp);
+        },
+        viewSize: (_) => const Size(200, 100),
+      );
+      final watch = Stopwatch()..start();
+
+      await driver.drag(
+        viewId: 3,
+        start: const Offset(20, 20),
+        delta: const Offset(60, 0),
+        duration: const Duration(milliseconds: 4),
+        steps: 2,
+        maxDuration: const Duration(seconds: 1),
+        cancellation: UiCancellation(),
+        holdStart: const Duration(milliseconds: 60),
+        holdEnd: const Duration(milliseconds: 60),
+      );
+      watch.stop();
+
+      expect(events.first, isA<PointerDownEvent>());
+      expect(events.last, isA<PointerUpEvent>());
+      expect(
+        watch.elapsed,
+        greaterThanOrEqualTo(const Duration(milliseconds: 120)),
+      );
+      expect(
+        stamps[1] - stamps[0],
+        greaterThanOrEqualTo(const Duration(milliseconds: 60)),
+      );
+      expect(
+        stamps[stamps.length - 1] - stamps[stamps.length - 2],
+        greaterThanOrEqualTo(const Duration(milliseconds: 60)),
+      );
+    },
+  );
+
   test('double tap sends two separate tap sequences', () async {
     final events = <PointerEvent>[];
     final driver = UiGestureDriver(

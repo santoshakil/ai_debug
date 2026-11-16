@@ -482,6 +482,8 @@ class _BlockingGestures extends UiGestureDriver {
     required int steps,
     required Duration maxDuration,
     required UiCancellation cancellation,
+    Duration holdStart = Duration.zero,
+    Duration holdEnd = Duration.zero,
   }) async {
     calls++;
     final pending = Completer<void>();
@@ -516,6 +518,8 @@ class _RecordingGestures extends UiGestureDriver {
     required int steps,
     required Duration maxDuration,
     required UiCancellation cancellation,
+    Duration holdStart = Duration.zero,
+    Duration holdEnd = Duration.zero,
   }) async {
     this.duration = duration;
   }

@@ -142,6 +142,8 @@ class UiGestureDriver {
     required int steps,
     required Duration maxDuration,
     required UiCancellation cancellation,
+    Duration holdStart = Duration.zero,
+    Duration holdEnd = Duration.zero,
   }) async {
     _checkReady();
     _validatePoint(viewId, start, 'start');
@@ -169,6 +171,7 @@ class UiGestureDriver {
           position: start,
         ),
       );
+      await cancellation.delay(holdStart);
       final pause = _stepDuration(duration, steps);
       for (var step = 1; step <= steps; step++) {
         await cancellation.delay(pause);
@@ -187,6 +190,7 @@ class UiGestureDriver {
         _active[pointer] = (viewId: viewId, position: position);
         cancellation.check();
       }
+      await cancellation.delay(holdEnd);
       _dispatch(
         PointerUpEvent(
           viewId: viewId,
